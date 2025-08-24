@@ -1,6 +1,7 @@
 api_key = ""
 import os
 import dspy
+
 lm = dspy.LM("gpt-5-mini-2025-08-07", temperature=1, api_key=api_key, max_tokens=32000)
 dspy.configure(lm=lm)
 import dspy
@@ -9,9 +10,15 @@ from datasets import load_dataset
 from collections import Counter
 import numpy as np
 
-def upsample_by_ratio(ds, label_col="answer", base_label="Yes",
-                      ratios={"Yes":1.0, "No":1.0, "To some extent":1.0},
-                      seed=3407, shuffle=True):
+
+def upsample_by_ratio(
+    ds,
+    label_col="answer",
+    base_label="Yes",
+    ratios={"Yes": 1.0, "No": 1.0, "To some extent": 1.0},
+    seed=3407,
+    shuffle=True,
+):
     """
     Upsample minority classes to a target ratio vs the base_label count.
     - ratios are multipliers relative to count(base_label).
@@ -48,57 +55,66 @@ def upsample_by_ratio(ds, label_col="answer", base_label="Yes",
         rng.shuffle(pick)
     return ds.select(pick.tolist())
 
+
 def init_dataset():
     # Load your single dataset with 'train' split
-    ds = load_dataset("SajayR/MI_chat_dataset")['train']  # Replace with your dataset name
+    ds = load_dataset("SajayR/MI_chat_dataset")[
+        "train"
+    ]  # Replace with your dataset name
     dataset = upsample_by_ratio(
-        ds, "label", "Yes",
-        ratios={"Yes":1.0, "No":0.8, "To some extent":0.8},
+        ds,
+        "label",
+        "Yes",
+        ratios={"Yes": 1.0, "No": 0.8, "To some extent": 0.8},
     )
     print("After :", Counter(dataset["label"]))
     # Convert to dspy.Example format
     dataset = [
-        dspy.Example({
-            "problem": x['input_text'],
-            'answer': x['label'],
-        }).with_inputs("problem")
+        dspy.Example(
+            {
+                "problem": x["input_text"],
+                "answer": x["label"],
+            }
+        ).with_inputs("problem")
         for x in dataset
     ]
-    
+
     import random
+
     random.Random(0).shuffle(dataset)
     tot_num = len(dataset)
 
-    
     train_end = int(0.9 * tot_num)
     val_end = train_end + int(0.05 * tot_num)  # 90% + 5% = 95%
 
-    train_set = dataset[:train_end]        # 0 to 90% = 90% of data
-    val_set = dataset[train_end:val_end]   # 90% to 95% = 5% of data  
-    test_set = dataset[val_end:]           # 95% to end = 5% of data
+    train_set = dataset[:train_end]  # 0 to 90% = 90% of data
+    val_set = dataset[train_end:val_end]  # 90% to 95% = 5% of data
+    test_set = dataset[val_end:]  # 95% to end = 5% of data
 
     return train_set, val_set, test_set
+
+
 train_set, val_set, test_set = init_dataset()
 
 len(train_set), len(val_set), len(test_set)
 print("Problem:")
-print(train_set[0]['problem'])
+print(train_set[0]["problem"])
 print("\n\nAnswer:")
-print(train_set[0]['answer'])
+print(train_set[0]["answer"])
 from typing import Literal
+
+
 class GenerateResponse(dspy.Signature):
     """Solve the problem and provide the answer in the correct format."""
-    problem = dspy.InputField()
-    #answer = dspy.OutputField()
 
-    answer: Literal[
-            "Yes",
-            "No",
-            "To some extent"
-    ] = dspy.OutputField()
+    problem = dspy.InputField()
+    # answer = dspy.OutputField()
+
+    answer: Literal["Yes", "No", "To some extent"] = dspy.OutputField()
+
 
 program = dspy.ChainOfThought(GenerateResponse)
-#program.predict.signature.instructions
+# program.predict.signature.instructions
 program.predict.signature.instructions = """You are an evaluator. Your task is to judge whether a “Candidate Tutor Response” correctly identifies a student’s mistake in a math tutoring dialogue.
 
 Input you will receive:
@@ -151,37 +167,46 @@ Formatting:
 - No explanations, punctuation, or extra lines.
 """
 print(program.predict.signature.instructions)
+
+
 def metric(example, prediction, trace=None, pred_name=None, pred_trace=None):
-    correct_answer = example['answer']
+    correct_answer = example["answer"]
     try:
         llm_answer = prediction.answer
     except ValueError as e:
         return 0
     return correct_answer == llm_answer
+
+
 import dspy
+
 evaluate = dspy.Evaluate(
     devset=test_set,
     metric=metric,
     num_threads=6,
     display_table=True,
-    display_progress=True
+    display_progress=True,
 )
 
 evaluate(program)
 print(program.predict.signature.instructions)
-def metric_with_feedback(example, prediction, trace=None, pred_name=None, pred_trace=None):
-    correct_answer = example['answer']
-    #written_solution = example.get('solution', '')
+
+
+def metric_with_feedback(
+    example, prediction, trace=None, pred_name=None, pred_trace=None
+):
+    correct_answer = example["answer"]
+    # written_solution = example.get('solution', '')
     try:
-        assert prediction.answer in ['Yes', 'No', 'To some extent']
+        assert prediction.answer in ["Yes", "No", "To some extent"]
         llm_answer = prediction.answer
-        #print(llm_answer)
+        # print(llm_answer)
     except ValueError as e:
         feedback_text = f"The final answer must one of the following: 'Yes', 'No', 'To some extent'. You responded with '{prediction.answer}', which was not one of the options. Please ensure your answer is one of the options without any additional text or formatting."
         feedback_text += f" The correct answer is '{correct_answer}'."
 
         return dspy.Prediction(score=0, feedback=feedback_text)
- 
+
     score = correct_answer == llm_answer
     task = """The task is to evaluate whether the candidate tutor reply correctly identifies the student's mistake according to the Mistake Identification rubric.
 
@@ -195,13 +220,19 @@ Rules of engagement:
 
     feedback_text = ""
     if score == 1:
-        feedback_text = f"Your answer is correct. The correct answer is '{correct_answer}'."
+        feedback_text = (
+            f"Your answer is correct. The correct answer is '{correct_answer}'."
+        )
     else:
-        feedback_text = f"Your answer is incorrect. The correct answer is '{correct_answer}'. "
+        feedback_text = (
+            f"Your answer is incorrect. The correct answer is '{correct_answer}'. "
+        )
 
     feedback_text += f"\n\n{task}"
 
     return dspy.Prediction(score=score, feedback=feedback_text)
+
+
 from dspy import GEPA
 
 optimizer = GEPA(
@@ -210,7 +241,12 @@ optimizer = GEPA(
     num_threads=8,
     track_stats=True,
     reflection_minibatch_size=8,
-    reflection_lm=dspy.LM(model="gpt-5-mini-2025-08-07", temperature=1.0, max_tokens=32000, api_key=api_key) #gpt-5-2025-08-07
+    reflection_lm=dspy.LM(
+        model="gpt-5-mini-2025-08-07",
+        temperature=1.0,
+        max_tokens=32000,
+        api_key=api_key,
+    ),  # gpt-5-2025-08-07
 )
 
 optimized_program = optimizer.compile(
@@ -224,4 +260,3 @@ with open("optimized_prompt.txt", "w") as f:
     f.write(optimized_program.predict.signature.instructions)
 optimized_program.save("./dspy_program/program.json", save_program=False)
 evaluate(optimized_program)
-
